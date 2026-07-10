@@ -70,10 +70,10 @@ authentication and session state. Codex currently stores config, auth, and
 session state under one `CODEX_HOME`, so it cannot be split further without
 upstream support.
 
-The sandbox mounts only the Nix store paths needed by Codex and its baseline
-tools. Nix store tools already present in the caller's `PATH` are also available
-read-only; no other host paths become visible. This package is available on
-Linux only.
+The sandbox mounts the full `/nix/store` read-only so every Nix package and its
+runtime dependencies remain executable. Caller `PATH` entries resolving into the
+Nix store or workspace are preserved; no other host paths become visible. This
+package is available on Linux only.
 
 ## Platforms
 

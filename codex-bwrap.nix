@@ -1,7 +1,6 @@
 {
   lib,
   writeShellApplication,
-  closureInfo,
   bubblewrap,
   bash,
   cacert,
@@ -31,10 +30,6 @@ let
     ripgrep
     codex
   ];
-
-  runtimeClosure = closureInfo {
-    rootPaths = runtimePackages;
-  };
 
   sandboxPath = lib.makeBinPath runtimePackages;
   certificateBundle = "${cacert}/etc/ssl/certs/ca-bundle.crt";
@@ -78,7 +73,6 @@ writeShellApplication {
     mkdir -p "$hostCodexHome"
     hostCodexHome="$(realpath -e "$hostCodexHome")"
 
-    declare -A mountedStorePaths=()
     bwrapArgs=(
       --unshare-all
       --share-net
@@ -99,6 +93,7 @@ writeShellApplication {
       --setenv TERM "''${TERM:-xterm-256color}"
       --dir /nix
       --dir /nix/store
+      --ro-bind /nix/store /nix/store
       --dir /workspace
       --bind "$workspace" /workspace
       --dir /home
@@ -122,22 +117,19 @@ writeShellApplication {
       --symlink ${coreutils}/bin/env /usr/bin/env
     )
 
-    while IFS= read -r storePath; do
-      bwrapArgs+=(--ro-bind "$storePath" "$storePath")
-      mountedStorePaths["$storePath"]=1
-    done < ${runtimeClosure}/store-paths
-
     sandboxPath="${sandboxPath}"
     while IFS= read -r pathEntry; do
-      pathEntry="''${pathEntry%/}"
-      case "$pathEntry" in
-        /nix/store/*/bin)
-          storePath="''${pathEntry%/bin}"
-          if [ -d "$storePath" ] && [ -z "''${mountedStorePaths[$storePath]+x}" ]; then
-            bwrapArgs+=(--ro-bind "$storePath" "$storePath")
-            mountedStorePaths["$storePath"]=1
-            sandboxPath="$sandboxPath:$pathEntry"
-          fi
+      [ -n "$pathEntry" ] || pathEntry=.
+      resolvedPath="$(realpath -m "$pathEntry")"
+      case "$resolvedPath" in
+        /nix/store/*)
+          sandboxPath="$sandboxPath:$resolvedPath"
+          ;;
+        "$workspace")
+          sandboxPath="$sandboxPath:/workspace"
+          ;;
+        "$workspace"/*)
+          sandboxPath="$sandboxPath:/workspace''${resolvedPath#"$workspace"}"
           ;;
       esac
     done < <(printf '%s' "$PATH" | tr ':' '\n')
