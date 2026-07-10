@@ -49,6 +49,32 @@ A consuming flake pins this repository in its own `flake.lock`. Refresh it with:
 nix flake update codex-nix
 ```
 
+## Workspace Sandbox (Linux)
+
+`codex-bwrap` starts Codex in a Bubblewrap mount namespace. The resolved current
+directory is its only project mount, exposed as `/workspace`; sibling directories,
+the rest of the host home directory, SSH agent, and Nix daemon are not mounted.
+Inside the sandbox, Codex uses the XDG path `$XDG_CONFIG_HOME/codex`; network
+access remains available for Codex API requests.
+
+```bash
+cd /path/to/project
+nix run github:Pionanx/codex-nix#codex-bwrap
+```
+
+The sole writable host-directory exception is Codex's data directory, fixed at
+`$XDG_CONFIG_HOME/codex` (default: `~/.config/codex`). There is no fallback to
+`~/.codex`: on first run, an existing legacy directory is moved to the XDG path.
+If both directories exist, the wrapper stops rather than guessing how to merge
+authentication and session state. Codex currently stores config, auth, and
+session state under one `CODEX_HOME`, so it cannot be split further without
+upstream support.
+
+The sandbox mounts only the Nix store paths needed by Codex and its baseline
+tools. Nix store tools already present in the caller's `PATH` are also available
+read-only; no other host paths become visible. This package is available on
+Linux only.
+
 ## Platforms
 
 | Platform | Architecture | GitHub Actions runner |

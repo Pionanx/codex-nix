@@ -17,15 +17,20 @@
       ];
 
       perSystem =
-        { pkgs, ... }:
+        { pkgs, lib, ... }:
         let
           codex = pkgs.callPackage ./package.nix { };
+          codexBwrap = pkgs.callPackage ./codex-bwrap.nix { inherit codex; };
         in
         {
-          packages = {
-            default = codex;
-            inherit codex;
-          };
+          packages =
+            {
+              default = codex;
+              inherit codex;
+            }
+            // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+              "codex-bwrap" = codexBwrap;
+            };
 
           apps.default = {
             type = "app";
