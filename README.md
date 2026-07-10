@@ -1,21 +1,21 @@
 # codex-nix
 
-Nix flake for [OpenAI Codex CLI](https://github.com/openai/codex) (the Rust CLI, `codex-rs`) — an AI coding agent for your terminal.
+Nix flake for [OpenAI Codex CLI](https://github.com/openai/codex), the Rust coding agent for your terminal.
 
-Packages the latest official pre-built binaries so you can use `codex` declaratively on NixOS, nix-darwin, and Home Manager without building from source.
+The package tracks the latest stable GitHub release and installs the official standalone bundle. That bundle includes `codex`, `codex-code-mode-host`, `rg`, the Codex resources, and `bwrap` on Linux.
 
 ## Quick Start
 
 ```bash
-nix run github:SecBear/codex-nix -- --version
-nix profile install github:SecBear/codex-nix
+nix run github:Pionanx/codex-nix -- --version
+nix profile install github:Pionanx/codex-nix
 ```
 
 ## Using as a Flake Input
 
 ```nix
 {
-  inputs.codex-nix.url = "github:SecBear/codex-nix";
+  inputs.codex-nix.url = "github:Pionanx/codex-nix";
 
   outputs = { nixpkgs, codex-nix, ... }: { ... };
 }
@@ -43,28 +43,44 @@ nix profile install github:SecBear/codex-nix
 }
 ```
 
+A consuming flake pins this repository in its own `flake.lock`. Refresh it with:
+
+```bash
+nix flake update codex-nix
+```
+
 ## Platforms
 
-| Platform | Architecture | Status |
-|----------|-------------|--------|
-| macOS    | aarch64 (Apple Silicon) | Supported |
-| macOS    | x86_64 | Supported |
-| Linux    | x86_64 | Supported |
-| Linux    | aarch64 | Supported |
+| Platform | Architecture | GitHub Actions runner |
+|----------|--------------|-----------------------|
+| Linux | x86_64 | `ubuntu-24.04` |
+| Linux | aarch64 | `ubuntu-24.04-arm` |
+| macOS | x86_64 | `macos-15-intel` |
+| macOS | aarch64 (Apple Silicon) | `macos-15` |
+
+All four platforms are built natively before an automated update is published.
 
 ## Updates
 
-CI checks for new releases hourly. When a new version is detected,
-it fetches updated hashes for all platforms, opens a PR, and auto-merges once CI passes.
-
-To update manually:
+`sources.json` is the single source of truth for the Codex version and release hashes. The updater reads GitHub's latest non-draft, non-prerelease release and verifies the official `codex-package_SHA256SUMS` manifest before changing that file.
 
 ```bash
-./scripts/update.sh          # update to latest
-./scripts/update.sh --check  # check only
-./scripts/update.sh 0.105.0  # specific version
+./scripts/update.sh          # update to the latest stable release
+./scripts/update.sh --check  # exit non-zero when version or hashes are stale
+./scripts/update.sh 0.144.1  # update to a specific release
+```
+
+The scheduled workflow checks hourly. When an update exists, it builds all four supported systems, rechecks that the release is still current, and atomically publishes `main`, `v<version>`, and `latest`.
+
+GitHub disables Actions on a newly created fork until its owner enables them. Enable workflows for this repository once so the scheduled updater can run.
+
+## Verification
+
+```bash
+nix flake check --print-build-logs
+nix run .# -- --version
 ```
 
 ## Related
 
-- [openai/codex](https://github.com/openai/codex) — upstream project
+- [openai/codex](https://github.com/openai/codex) - upstream project

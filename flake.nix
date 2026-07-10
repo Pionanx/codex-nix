@@ -1,12 +1,13 @@
 {
-  description = "Nix flake for codex — OpenAI Codex CLI, an AI coding agent for your terminal";
+  description = "Nix flake for Codex, OpenAI's coding agent for the terminal";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
   };
 
-  outputs = inputs:
+  outputs =
+    inputs:
     inputs.flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [
         "x86_64-linux"
@@ -15,7 +16,8 @@
         "aarch64-darwin"
       ];
 
-      perSystem = { pkgs, ... }:
+      perSystem =
+        { pkgs, ... }:
         let
           codex = pkgs.callPackage ./package.nix { };
         in
@@ -28,10 +30,36 @@
           apps.default = {
             type = "app";
             program = "${codex}/bin/codex";
+            meta.description = "OpenAI Codex CLI";
           };
 
-          devShells.default = pkgs.mkShell {
-            buildInputs = [ codex ];
+          checks = {
+            package = codex;
+            version =
+              pkgs.runCommand "codex-version-${codex.version}"
+                {
+                  nativeBuildInputs = [ codex ];
+                }
+                ''
+                  actual="$(codex --version 2>/dev/null)"
+                  expected="codex-cli ${codex.version}"
+
+                  if [ "$actual" != "$expected" ]; then
+                    echo "expected '$expected', got '$actual'" >&2
+                    exit 1
+                  fi
+
+                  HOME="$TMPDIR" codex --help >/dev/null 2>&1
+                  touch "$out"
+                '';
+          };
+
+          devShells.default = pkgs.mkShellNoCC {
+            packages = [
+              codex
+              pkgs.curl
+              pkgs.jq
+            ];
           };
         };
 

@@ -1,92 +1,243 @@
 #!/usr/bin/env bash
 #
-# Update codex to a new version.
+# Update Codex to an official GitHub release.
 #
 # Usage:
-#   ./scripts/update.sh              # update to latest
-#   ./scripts/update.sh --check      # check for new version, don't update
-#   ./scripts/update.sh 0.105.0      # update to specific version
+#   ./scripts/update.sh              # update to latest stable release
+#   ./scripts/update.sh --check      # fail if sources.json is not latest
+#   ./scripts/update.sh 0.144.1      # update to a specific release
 
 set -euo pipefail
 
 REPO="openai/codex"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PACKAGE_NIX="${SCRIPT_DIR}/../package.nix"
+SOURCES_JSON="${SCRIPT_DIR}/../sources.json"
+CHECKSUM_ASSET="codex-package_SHA256SUMS"
 
 PLATFORMS=(
   "aarch64-apple-darwin"
+  "aarch64-unknown-linux-musl"
   "x86_64-apple-darwin"
-  "x86_64-unknown-linux-gnu"
-  "aarch64-unknown-linux-gnu"
+  "x86_64-unknown-linux-musl"
 )
 
+usage() {
+  sed -n '2,8s/^# \{0,1\}//p' "$0"
+}
+
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "$1 is required"
+}
+
+github_api() {
+  local url="$1"
+  local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  local args=(
+    --fail
+    --silent
+    --show-error
+    --location
+    --retry 3
+    --header "Accept: application/vnd.github+json"
+    --header "X-GitHub-Api-Version: 2022-11-28"
+  )
+
+  if [[ -z "$token" ]] \
+    && command -v gh >/dev/null 2>&1 \
+    && gh auth status --hostname github.com >/dev/null 2>&1; then
+    gh api "${url#https://api.github.com/}"
+    return
+  fi
+
+  if [[ -n "$token" ]]; then
+    args+=(--header "Authorization: Bearer ${token}")
+  fi
+
+  curl "${args[@]}" "$url"
+}
+
+download_file() {
+  local url="$1"
+  local output="$2"
+
+  curl \
+    --fail \
+    --silent \
+    --show-error \
+    --location \
+    --retry 3 \
+    --output "$output" \
+    "$url"
+}
+
+normalize_version() {
+  local version="$1"
+
+  version="${version#rust-v}"
+  version="${version#v}"
+
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]] \
+    || die "invalid version: $1"
+
+  printf '%s\n' "$version"
+}
+
 current_version() {
-  grep 'version = "' "$PACKAGE_NIX" | head -1 | sed 's/.*"\(.*\)".*/\1/'
+  jq --exit-status --raw-output '.version' "$SOURCES_JSON"
 }
 
-latest_version() {
-  if command -v gh >/dev/null 2>&1; then
-    gh release view --repo "$REPO" --json tagName -q '.tagName' | sed 's/^rust-v//'
-  else
-    curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-      | grep '"tag_name"' \
-      | sed 's/.*"rust-v\(.*\)".*/\1/'
-  fi
+asset_hash() {
+  local manifest="$1"
+  local asset="$2"
+  local hex
+
+  hex=$(awk -v asset="$asset" '
+    $2 == asset && length($1) == 64 && $1 !~ /[^0-9a-fA-F]/ {
+      print tolower($1)
+      found = 1
+      exit
+    }
+    END {
+      if (!found) {
+        exit 1
+      }
+    }
+  ' "$manifest") || die "missing checksum for ${asset}"
+
+  nix hash convert --hash-algo sha256 --to sri "$hex"
 }
 
-# --- main ---
+require_command curl
+require_command jq
+require_command nix
 
-CURRENT=$(current_version)
-echo "Current version: ${CURRENT}"
+mode="update"
+requested="latest"
 
-if [[ "${1:-}" == "--check" ]] || [[ $# -eq 0 ]]; then
-  LATEST=$(latest_version)
-  echo "Latest version:  ${LATEST}"
-  if [[ "$CURRENT" == "$LATEST" ]]; then
-    echo "Already up to date."
-    exit 0
-  fi
-  echo ""
-  echo "Update available! Run:"
-  echo "  ./scripts/update.sh ${LATEST}"
-  [[ "${1:-}" == "--check" ]] && exit 0
-  # If called with no args, fall through to update
-  NEW_VERSION="$LATEST"
+case "$#" in
+  0)
+    ;;
+  1)
+    case "$1" in
+      --check)
+        mode="check"
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        requested=$(normalize_version "$1")
+        ;;
+    esac
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$requested" == "latest" ]]; then
+  release_json=$(github_api "https://api.github.com/repos/${REPO}/releases/latest")
 else
-  NEW_VERSION="$1"
+  release_json=$(github_api "https://api.github.com/repos/${REPO}/releases/tags/rust-v${requested}")
 fi
 
-echo "Updating to:     ${NEW_VERSION}"
-echo ""
+tag=$(jq --exit-status --raw-output '.tag_name' <<<"$release_json") \
+  || die "release metadata does not contain a tag"
+[[ "$tag" == rust-v* ]] || die "unexpected upstream tag: ${tag}"
 
-echo "Fetching SHA256 hashes..."
+new_version=$(normalize_version "$tag")
+if [[ "$requested" != "latest" && "$requested" != "$new_version" ]]; then
+  die "requested ${requested}, but GitHub returned ${tag}"
+fi
+
+if [[ "$requested" == "latest" ]]; then
+  jq --exit-status '.draft == false and .prerelease == false' <<<"$release_json" >/dev/null \
+    || die "GitHub latest release is not a stable published release"
+fi
+
+checksum_url=$(
+  jq --exit-status --raw-output --arg asset "$CHECKSUM_ASSET" '
+    .assets[] | select(.name == $asset) | .browser_download_url
+  ' <<<"$release_json"
+) || die "release ${tag} does not contain ${CHECKSUM_ASSET}"
+
+checksum_digest=$(
+  jq --exit-status --raw-output --arg asset "$CHECKSUM_ASSET" '
+    .assets[] | select(.name == $asset) | .digest
+  ' <<<"$release_json"
+) || die "release ${tag} does not publish a digest for ${CHECKSUM_ASSET}"
+
+[[ "$checksum_digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]] \
+  || die "invalid digest for ${CHECKSUM_ASSET}: ${checksum_digest}"
+
+tmp_dir=$(mktemp -d)
+trap 'rm -rf "$tmp_dir"' EXIT
+
+manifest="${tmp_dir}/${CHECKSUM_ASSET}"
+desired_sources="${tmp_dir}/sources.json"
+
+download_file "$checksum_url" "$manifest"
+
+expected_manifest_hash=$(
+  nix hash convert \
+    --hash-algo sha256 \
+    --to sri \
+    "${checksum_digest#sha256:}"
+)
+actual_manifest_hash=$(nix hash file --type sha256 "$manifest")
+[[ "$actual_manifest_hash" == "$expected_manifest_hash" ]] \
+  || die "checksum manifest digest mismatch"
+
 for platform in "${PLATFORMS[@]}"; do
-  hash=$(nix-prefetch-url \
-    "https://github.com/${REPO}/releases/download/rust-v${NEW_VERSION}/codex-${platform}.tar.gz" \
-    2>/dev/null | tail -1)
-
-  echo "  ${platform}: ${hash}"
-
-  tmp=$(mktemp)
-  awk -v platform="$platform" -v hash="$hash" '
-    /hashes = \{/ { in_block=1 }
-    in_block && $0 ~ "\"" platform "\"" {
-      sub(/= "[^"]*"/, "= \"" hash "\"")
-    }
-    in_block && /\};/ { in_block=0 }
-    { print }
-  ' "$PACKAGE_NIX" > "$tmp"
-  mv "$tmp" "$PACKAGE_NIX"
+  asset="codex-package-${platform}.tar.gz"
+  jq --exit-status --arg asset "$asset" \
+    'any(.assets[]; .name == $asset)' <<<"$release_json" >/dev/null \
+    || die "release ${tag} does not contain ${asset}"
 done
 
-tmp=$(mktemp)
-sed "s/version = \"${CURRENT}\"/version = \"${NEW_VERSION}\"/" "$PACKAGE_NIX" > "$tmp"
-mv "$tmp" "$PACKAGE_NIX"
+hash_aarch64_darwin=$(asset_hash "$manifest" "codex-package-aarch64-apple-darwin.tar.gz")
+hash_aarch64_linux=$(asset_hash "$manifest" "codex-package-aarch64-unknown-linux-musl.tar.gz")
+hash_x86_64_darwin=$(asset_hash "$manifest" "codex-package-x86_64-apple-darwin.tar.gz")
+hash_x86_64_linux=$(asset_hash "$manifest" "codex-package-x86_64-unknown-linux-musl.tar.gz")
 
-echo ""
-echo "Updated package.nix to v${NEW_VERSION}"
-echo ""
-echo "Next steps:"
-echo "  1. nix build              # verify it builds"
-echo "  2. ./result/bin/codex --version"
-echo "  3. git add package.nix && git commit -m \"update codex to ${NEW_VERSION}\""
+jq --null-input \
+  --arg version "$new_version" \
+  --arg hash_aarch64_darwin "$hash_aarch64_darwin" \
+  --arg hash_aarch64_linux "$hash_aarch64_linux" \
+  --arg hash_x86_64_darwin "$hash_x86_64_darwin" \
+  --arg hash_x86_64_linux "$hash_x86_64_linux" \
+  '{
+    version: $version,
+    hashes: {
+      "aarch64-apple-darwin": $hash_aarch64_darwin,
+      "aarch64-unknown-linux-musl": $hash_aarch64_linux,
+      "x86_64-apple-darwin": $hash_x86_64_darwin,
+      "x86_64-unknown-linux-musl": $hash_x86_64_linux
+    }
+  }' >"$desired_sources"
+
+current=$(current_version)
+echo "Current version: ${current}"
+echo "Latest version:  ${new_version}"
+
+if cmp -s "$SOURCES_JSON" "$desired_sources"; then
+  echo "Already up to date."
+  exit 0
+fi
+
+if [[ "$mode" == "check" ]]; then
+  echo "sources.json does not match the latest stable Codex release." >&2
+  diff -u "$SOURCES_JSON" "$desired_sources" >&2 || true
+  exit 1
+fi
+
+mv "$desired_sources" "$SOURCES_JSON"
+echo "Updated sources.json to Codex ${new_version}."
+echo "Run 'nix flake check --print-build-logs' to verify the package."
