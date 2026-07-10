@@ -5,6 +5,8 @@ on:
     paths:
       - "sources.json"
       - "package.nix"
+      - "codex-bwrap.nix"
+      - "codex-dispatch.nix"
       - "flake.nix"
       - "flake.lock"
       - "scripts/**"
@@ -57,5 +59,5 @@ jobs:
       - name: Verify packaged version
         run: |
           EXPECTED_VERSION=$(jq --raw-output '.version' sources.json)
-          ACTUAL_VERSION=$(nix run .# -- --version)
+          ACTUAL_VERSION=$(nix run .# -- --unwrapped --version)
           test "$ACTUAL_VERSION" = "codex-cli $EXPECTED_VERSION"

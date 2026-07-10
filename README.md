@@ -7,7 +7,7 @@ The package tracks the latest stable GitHub release and installs the official st
 ## Quick Start
 
 ```bash
-nix run github:Pionanx/codex-nix -- --version
+nix run github:Pionanx/codex-nix -- --unwrapped --version
 nix profile install github:Pionanx/codex-nix
 ```
 
@@ -49,31 +49,92 @@ A consuming flake pins this repository in its own `flake.lock`. Refresh it with:
 nix flake update codex-nix
 ```
 
-## Workspace Sandbox (Linux)
+## Sandbox Modes (Linux)
 
-`codex-bwrap` starts Codex in a Bubblewrap mount namespace. The resolved current
-directory is its only project mount, exposed as `/workspace`; sibling directories,
-the rest of the host home directory, SSH agent, and Nix daemon are not mounted.
-Inside the sandbox, Codex uses the XDG path `$XDG_CONFIG_HOME/codex`; network
-access remains available for Codex API requests.
+On Linux, the default `codex` command starts the upstream CLI inside a resource-
+limited Bubblewrap sandbox. The workspace is mounted read-only by default. The
+host home directory, sibling directories, SSH agent, D-Bus, and Nix daemon are
+not mounted. Network access remains available for Codex API requests.
 
 ```bash
 cd /path/to/project
-nix run github:Pionanx/codex-nix#codex-bwrap
+codex                         # read-only workspace, full /nix/store
+codex bwrap --write           # explicitly allow workspace changes
+codex --unwrapped             # run upstream Codex without the outer sandbox
 ```
 
-The sole writable host-directory exception is Codex's data directory, fixed at
-`$XDG_CONFIG_HOME/codex` (default: `~/.config/codex`). There is no fallback to
-`~/.codex`: on first run, an existing legacy directory is moved to the XDG path.
-If both directories exist, the wrapper stops rather than guessing how to merge
-authentication and session state. Codex currently stores config, auth, and
-session state under one `CODEX_HOME`, so it cannot be split further without
-upstream support.
+`--unwrapped` bypasses Bubblewrap but still sets `CODEX_HOME` to the XDG location
+so it shares authentication, configuration, and sessions with sandboxed Codex.
 
-The sandbox mounts the full `/nix/store` read-only so every Nix package and its
-runtime dependencies remain executable. Caller `PATH` entries resolving into the
-Nix store or workspace are preserved; no other host paths become visible. This
-package is available on Linux only.
+### Resource Limits
+
+Each sandbox runs through `systemd-run --user --scope` with these defaults:
+
+| Limit | Default |
+|-------|---------|
+| `MemoryMax` | `8G` |
+| `CPUQuota` | `200%` |
+| `TasksMax` | `512` |
+
+Override them for one invocation:
+
+```bash
+codex bwrap --memory 12G --cpu 400% --tasks 1024
+```
+
+This requires a working user systemd manager with delegated cgroup controllers.
+The wrapper fails rather than silently dropping the limits when that is unavailable.
+
+### Nix Environments
+
+The default and `nix --full` modes mount the complete `/nix/store` read-only, so
+all installed Nix software and runtime dependencies remain executable.
+
+```bash
+# Explicit full-store mode (equivalent to the default store policy)
+codex bwrap nix --full
+
+# Temporary Nixpkgs tools, mounted with only their runtime closure
+codex bwrap nix --nixpkgs hello cargo --
+codex bwrap --write nix --nixpkgs rustc cargo -- exec "run the tests"
+
+# The current flake's default devShell, mounted with its runtime closure
+codex bwrap nix --flake --
+
+# A named devShell
+codex bwrap nix --flake .#rust --
+```
+
+`nix --flake` invokes `nix develop` before entering Bubblewrap. Treat the current
+flake and its development shell as trusted: evaluating or preparing a devShell is
+outside the workspace filesystem sandbox.
+
+### Hardened Mode
+
+```bash
+codex bwrap --disable-nested-userns
+```
+
+This experimental option adds Bubblewrap's `--disable-userns`. It reduces the
+surface exposed to nested sandboxes, but may prevent Codex's internal Linux
+sandbox from starting. It is intentionally opt-in.
+
+### XDG State
+
+Codex data is fixed at `$XDG_CONFIG_HOME/codex` (default:
+`~/.config/codex`). There is no fallback to `~/.codex`: on first run, an existing
+legacy directory is moved to the XDG path. If both directories exist, the wrapper
+stops rather than guessing how to merge authentication and session state. Codex
+currently stores config, auth, and session state under one `CODEX_HOME`, so it
+cannot be split further without upstream support.
+
+Direct package entry points remain available:
+
+```bash
+nix run github:Pionanx/codex-nix#codex-bwrap       # writable, full store
+nix run github:Pionanx/codex-nix#codex-bwrap-ro    # read-only, full store
+nix run github:Pionanx/codex-nix#codex-unwrapped   # upstream binary
+```
 
 ## Platforms
 
@@ -104,7 +165,7 @@ GitHub disables Actions on a newly created fork until its owner enables them. En
 
 ```bash
 nix flake check --print-build-logs
-nix run .# -- --version
+nix run .# -- --unwrapped --version
 ```
 
 ## Related
