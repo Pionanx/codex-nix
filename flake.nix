@@ -125,6 +125,46 @@
                   fi
 
                   codex bwrap --help >/dev/null
+
+                  help="$(codex bwrap --help)"
+                  case "$help" in
+                    *"codex nix "*)
+                      echo "legacy codex nix syntax is still documented" >&2
+                      exit 1
+                      ;;
+                  esac
+
+                  for args in "--nixpkgs" "--nixpkgs --write"; do
+                    if codex $args >"$TMPDIR/error" 2>&1; then
+                      echo "codex $args unexpectedly succeeded" >&2
+                      exit 1
+                    fi
+
+                    if ! ${pkgs.gnugrep}/bin/grep -Fq -- "--nixpkgs requires at least one package" "$TMPDIR/error"; then
+                      cat "$TMPDIR/error" >&2
+                      exit 1
+                    fi
+                  done
+
+                  if codex nix --flake >"$TMPDIR/error" 2>&1; then
+                    echo "legacy codex nix syntax unexpectedly succeeded" >&2
+                    exit 1
+                  fi
+
+                  if ! ${pkgs.gnugrep}/bin/grep -Fq "'codex nix ...' was removed" "$TMPDIR/error"; then
+                    cat "$TMPDIR/error" >&2
+                    exit 1
+                  fi
+
+                  if codex --full --flake >"$TMPDIR/error" 2>&1; then
+                    echo "multiple Nix modes unexpectedly succeeded" >&2
+                    exit 1
+                  fi
+
+                  if ! ${pkgs.gnugrep}/bin/grep -Fq "only one Nix mode may be selected" "$TMPDIR/error"; then
+                    cat "$TMPDIR/error" >&2
+                    exit 1
+                  fi
                   touch "$out"
                 '';
           };

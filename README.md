@@ -59,7 +59,7 @@ not mounted. Network access remains available for Codex API requests.
 ```bash
 cd /path/to/project
 codex                         # read-only workspace, full /nix/store
-codex bwrap --write           # explicitly allow workspace changes
+codex --write                 # explicitly allow workspace changes
 codex --unwrapped             # run upstream Codex without the outer sandbox
 ```
 
@@ -87,25 +87,25 @@ The wrapper fails rather than silently dropping the limits when that is unavaila
 
 ### Nix Environments
 
-The default and `nix --full` modes mount the complete `/nix/store` read-only, so
+The default and `--full` modes mount the complete `/nix/store` read-only, so
 all installed Nix software and runtime dependencies remain executable.
 
 ```bash
 # Explicit full-store mode (equivalent to the default store policy)
-codex bwrap nix --full
+codex --full
 
 # Temporary Nixpkgs tools, mounted with only their runtime closure
-codex bwrap nix --nixpkgs hello cargo --
-codex bwrap --write nix --nixpkgs rustc cargo -- exec "run the tests"
+codex --nixpkgs hello cargo --
+codex --nixpkgs rustc cargo --write -- exec "run the tests"
 
 # The current flake's default devShell, mounted with its runtime closure
-codex bwrap nix --flake --
+codex --flake --
 
 # A named devShell
-codex bwrap nix --flake .#rust --
+codex --flake .#rust --
 ```
 
-`nix --flake` invokes `nix develop` before entering Bubblewrap. Treat the current
+`--flake` invokes `nix develop` before entering Bubblewrap. Treat the current
 flake and its development shell as trusted: evaluating or preparing a devShell is
 outside the workspace filesystem sandbox.
 

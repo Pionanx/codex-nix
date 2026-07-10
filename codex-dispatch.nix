@@ -18,9 +18,9 @@ writeShellApplication {
     printBwrapHelp() {
       cat <<'EOF'
 Usage:
-  codex [CODEX_ARGS...]
+  codex [OPTIONS] [NIX_MODE] [-- CODEX_ARGS...]
   codex --unwrapped [CODEX_ARGS...]
-  codex bwrap [OPTIONS] [nix MODE] [-- CODEX_ARGS...]
+  codex bwrap [OPTIONS] [NIX_MODE] [-- CODEX_ARGS...]
 
 Default behavior:
   codex                       Run Codex in a read-only workspace sandbox.
@@ -35,9 +35,9 @@ Bwrap options:
   -h, --help                   Show this help.
 
 Nix modes:
-  nix --full                   Read-only mount of the full /nix/store.
-  nix --nixpkgs PKG... --      Start through nix shell with nixpkgs packages.
-  nix --flake [INSTALLABLE] -- Start through nix develop (default: .).
+  --full                       Read-only mount of the full /nix/store.
+  --nixpkgs PKG... --          Start through nix shell with nixpkgs packages.
+  --flake [INSTALLABLE] --     Start through nix develop (default: .).
 
 Use -- to separate bwrap or Nix options from upstream Codex arguments.
 EOF
@@ -103,6 +103,8 @@ EOF
       local disableNestedUserns=0
       local importDevEnv=0
       local wrapper
+      local nixModeSet=0
+      local flakeTargetSet=0
       local -a nixPackages=()
       local -a codexArgs=()
 
@@ -131,48 +133,45 @@ EOF
             disableNestedUserns=1
             shift
             ;;
-          -h|--help)
-            printBwrapHelp
-            exit 0
+          --full)
+            if [ "$nixModeSet" = 1 ]; then
+              echo "only one Nix mode may be selected" >&2
+              exit 2
+            fi
+            nixModeSet=1
+            shift
+            ;;
+          --nixpkgs)
+            if [ "$nixModeSet" = 1 ]; then
+              echo "only one Nix mode may be selected" >&2
+              exit 2
+            fi
+            nixMode=nixpkgs
+            nixModeSet=1
+            shift
+            ;;
+          --flake)
+            if [ "$nixModeSet" = 1 ]; then
+              echo "only one Nix mode may be selected" >&2
+              exit 2
+            fi
+            nixMode=flake
+            nixModeSet=1
+            shift
             ;;
           nix)
-            shift
-            case "''${1:-}" in
-              --full)
-                nixMode=full
-                shift
-                ;;
-              --nixpkgs)
-                nixMode=nixpkgs
-                shift
-                while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
-                  nixPackages+=("nixpkgs#$1")
-                  shift
-                done
-                if [ "''${1:-}" = -- ]; then
-                  shift
-                fi
-                codexArgs=("$@")
-                break
-                ;;
-              --flake)
-                nixMode=flake
-                shift
-                if [ "$#" -gt 0 ] && [ "$1" != -- ]; then
-                  flakeTarget="$1"
-                  shift
-                fi
-                if [ "''${1:-}" = -- ]; then
-                  shift
-                fi
-                codexArgs=("$@")
-                break
-                ;;
-              *)
-                echo "expected --full, --nixpkgs, or --flake after 'nix'" >&2
+            case "''${2:-}" in
+              --full|--nixpkgs|--flake)
+                echo "'codex nix ...' was removed; use the Nix mode option directly" >&2
                 exit 2
                 ;;
             esac
+            codexArgs=("$@")
+            break
+            ;;
+          -h|--help)
+            printBwrapHelp
+            exit 0
             ;;
           --)
             shift
@@ -180,8 +179,26 @@ EOF
             break
             ;;
           *)
-            codexArgs=("$@")
-            break
+            case "$nixMode" in
+              full)
+                codexArgs=("$@")
+                break
+                ;;
+              nixpkgs)
+                nixPackages+=("nixpkgs#$1")
+                shift
+                ;;
+              flake)
+                if [ "$flakeTargetSet" = 0 ]; then
+                  flakeTarget="$1"
+                  flakeTargetSet=1
+                  shift
+                else
+                  codexArgs=("$@")
+                  break
+                fi
+                ;;
+            esac
             ;;
         esac
       done
@@ -206,7 +223,7 @@ EOF
           ;;
         nixpkgs)
           if [ "''${#nixPackages[@]}" -eq 0 ]; then
-            echo "nix --nixpkgs requires at least one package" >&2
+            echo "--nixpkgs requires at least one package" >&2
             exit 2
           fi
 
