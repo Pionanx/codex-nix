@@ -41,8 +41,11 @@ stdenv.mkDerivation {
 
   nativeBuildInputs = lib.optionals isLinux [ autoPatchelfHook ];
 
-  # The Linux package is static except for its bundled zsh, which needs libtinfo.
-  buildInputs = lib.optionals isLinux [ ncurses ];
+  # Bundled Linux helpers need libtinfo, and aarch64 rg also needs libgcc_s.
+  buildInputs = lib.optionals isLinux [
+    stdenv.cc.cc.lib
+    ncurses
+  ];
 
   dontConfigure = true;
   dontBuild = true;
