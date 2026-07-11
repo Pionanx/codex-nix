@@ -85,48 +85,179 @@ writeShellApplication {
     mkdir -p "$hostCodexHome"
     hostCodexHome="$(realpath -e "$hostCodexHome")"
 
-    bwrapArgs=(
-      --unshare-all
-      --share-net
-      --die-with-parent
-      --new-session
-      --cap-drop ALL
-      --clearenv
-      --hostname codex-bwrap
-      --setenv HOME /home/codex
-      --setenv CODEX_HOME /home/codex/.config/codex
-      --setenv XDG_CONFIG_HOME /home/codex/.config
-      --setenv XDG_DATA_HOME /home/codex/.local/share
-      --setenv XDG_STATE_HOME /home/codex/.local/state
-      --setenv XDG_CACHE_HOME /tmp/codex-cache
-      --setenv TMPDIR /tmp
-      --setenv SSL_CERT_FILE ${certificateBundle}
-      --setenv NIX_SSL_CERT_FILE ${certificateBundle}
-      --setenv TERM "''${TERM:-xterm-256color}"
-      --dir /nix
-      --dir /nix/store
-      --dir /workspace
-      ${workspaceMount} "$workspace" /workspace
-      --dir /home
-      --dir /home/codex
-      --dir /home/codex/.config
-      --bind "$hostCodexHome" /home/codex/.config/codex
-      --dir /home/codex/.local
-      --dir /home/codex/.local/share
-      --dir /home/codex/.local/state
-      --dir /etc
-      --ro-bind-try /etc/resolv.conf /etc/resolv.conf
-      --proc /proc
-      --dev /dev
-      --tmpfs /tmp
-      --dir /bin
-      --dir /usr
-      --dir /usr/bin
-      --symlink ${bash}/bin/bash /bin/bash
-      --symlink ${bash}/bin/sh /bin/sh
-      --symlink ${bash}/bin/bash /usr/bin/bash
-      --symlink ${coreutils}/bin/env /usr/bin/env
-    )
+    requireValue() {
+      if [ "$#" -lt 2 ]; then
+        echo "missing value for $1" >&2
+        exit 2
+      fi
+    }
+
+    addAllowedDirectory() {
+      local directory="$1"
+
+      case "$directory" in
+        /*) ;;
+        *)
+          echo "--allow-dir requires an absolute path" >&2
+          exit 2
+          ;;
+      esac
+
+      if [ ! -d "$directory" ]; then
+        echo "--allow-dir must name an existing directory: $directory" >&2
+        exit 2
+      fi
+
+      allowedDirs+=("$(realpath -e "$directory")")
+    }
+
+    allowAllDirs=0
+    declare -a allowedDirs=()
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --allow-dir)
+          requireValue "$@"
+          addAllowedDirectory "$2"
+          shift 2
+          ;;
+        --allow-home)
+          addAllowedDirectory "$HOME"
+          shift
+          ;;
+        --all-dirs)
+          allowAllDirs=1
+          shift
+          ;;
+        --)
+          shift
+          break
+          ;;
+        *)
+          break
+          ;;
+      esac
+    done
+
+    if [ "$allowAllDirs" = 1 ] && [ "''${#allowedDirs[@]}" -gt 0 ]; then
+      echo "--all-dirs cannot be combined with --allow-dir or --allow-home" >&2
+      exit 2
+    fi
+
+    if [ "$allowAllDirs" = 1 ]; then
+      hostXdgDataHome="''${XDG_DATA_HOME:-$HOME/.local/share}"
+      hostXdgStateHome="''${XDG_STATE_HOME:-$HOME/.local/state}"
+      hostXdgCacheHome="''${XDG_CACHE_HOME:-$HOME/.cache}"
+
+      bwrapArgs=(
+        --unshare-all
+        --share-net
+        --die-with-parent
+        --new-session
+        --cap-drop ALL
+        --clearenv
+        --hostname codex-bwrap
+        --setenv HOME "$HOME"
+        --setenv CODEX_HOME "$hostCodexHome"
+        --setenv XDG_CONFIG_HOME "$hostXdgConfigHome"
+        --setenv XDG_DATA_HOME "$hostXdgDataHome"
+        --setenv XDG_STATE_HOME "$hostXdgStateHome"
+        --setenv XDG_CACHE_HOME "$hostXdgCacheHome"
+        --setenv TMPDIR "''${TMPDIR:-/tmp}"
+        --setenv SSL_CERT_FILE ${certificateBundle}
+        --setenv NIX_SSL_CERT_FILE ${certificateBundle}
+        --setenv TERM "''${TERM:-xterm-256color}"
+        --bind / /
+        --bind "$workspace" /workspace
+        --proc /proc
+        --dev /dev
+      )
+    else
+      bwrapArgs=(
+        --unshare-all
+        --share-net
+        --die-with-parent
+        --new-session
+        --cap-drop ALL
+        --clearenv
+        --hostname codex-bwrap
+        --setenv HOME /home/codex
+        --setenv CODEX_HOME /home/codex/.config/codex
+        --setenv XDG_CONFIG_HOME /home/codex/.config
+        --setenv XDG_DATA_HOME /home/codex/.local/share
+        --setenv XDG_STATE_HOME /home/codex/.local/state
+        --setenv XDG_CACHE_HOME /tmp/codex-cache
+        --setenv TMPDIR /tmp
+        --setenv SSL_CERT_FILE ${certificateBundle}
+        --setenv NIX_SSL_CERT_FILE ${certificateBundle}
+        --setenv TERM "''${TERM:-xterm-256color}"
+        --dir /nix
+        --dir /nix/store
+        --dir /workspace
+        ${workspaceMount} "$workspace" /workspace
+        --dir /home
+        --dir /home/codex
+        --dir /home/codex/.config
+        --bind "$hostCodexHome" /home/codex/.config/codex
+        --dir /home/codex/.local
+        --dir /home/codex/.local/share
+        --dir /home/codex/.local/state
+        --dir /etc
+        --ro-bind-try /etc/resolv.conf /etc/resolv.conf
+        --proc /proc
+        --dev /dev
+        --tmpfs /tmp
+        --dir /bin
+        --dir /usr
+        --dir /usr/bin
+        --symlink ${bash}/bin/bash /bin/bash
+        --symlink ${bash}/bin/sh /bin/sh
+        --symlink ${bash}/bin/bash /usr/bin/bash
+        --symlink ${coreutils}/bin/env /usr/bin/env
+      )
+
+      declare -A sandboxDirectories=(
+        [/nix]=1
+        [/nix/store]=1
+        [/workspace]=1
+        [/home]=1
+        [/home/codex]=1
+        [/home/codex/.config]=1
+        [/home/codex/.local]=1
+        [/home/codex/.local/share]=1
+        [/home/codex/.local/state]=1
+        [/etc]=1
+        [/bin]=1
+        [/usr]=1
+        [/usr/bin]=1
+        [/tmp]=1
+      )
+
+      addSandboxDirectoryParents() {
+        local directory="$1"
+        local parent
+        local index
+        local -a parents=()
+
+        parent="$(dirname "$directory")"
+        while [ "$parent" != / ]; do
+          parents+=("$parent")
+          parent="$(dirname "$parent")"
+        done
+
+        for ((index = ''${#parents[@]} - 1; index >= 0; index--)); do
+          parent="''${parents[$index]}"
+          if [ -z "''${sandboxDirectories[$parent]+x}" ]; then
+            bwrapArgs+=(--dir "$parent")
+            sandboxDirectories["$parent"]=1
+          fi
+        done
+      }
+
+      for allowedDir in "''${allowedDirs[@]}"; do
+        addSandboxDirectoryParents "$allowedDir"
+        bwrapArgs+=(--bind "$allowedDir" "$allowedDir")
+      done
+    fi
 
     if [ "''${CODEX_BWRAP_DISABLE_NESTED_USERNS:-0}" = 1 ]; then
       bwrapArgs+=(--disable-userns)
@@ -135,7 +266,9 @@ writeShellApplication {
     ${
       if storeMode == "full" then
         ''
-          bwrapArgs+=(--ro-bind /nix/store /nix/store)
+          if [ "$allowAllDirs" = 0 ]; then
+            bwrapArgs+=(--ro-bind /nix/store /nix/store)
+          fi
         ''
       else
         ''
@@ -143,6 +276,8 @@ writeShellApplication {
 
           mountStorePath() {
             local storePath="$1"
+
+            [ "$allowAllDirs" = 0 ] || return 0
 
             if [ -z "''${mountedStorePaths[$storePath]+x}" ]; then
               bwrapArgs+=(--ro-bind "$storePath" "$storePath")
@@ -155,6 +290,8 @@ writeShellApplication {
             local closurePath
             local closurePaths
 
+            [ "$allowAllDirs" = 0 ] || return 0
+
             if ! closurePaths="$(${lib.getExe' nix "nix-store"} --extra-experimental-features nix-command --query --requisites "$storePath")"; then
               echo "could not resolve the Nix closure for $storePath" >&2
               exit 2
@@ -165,9 +302,11 @@ writeShellApplication {
             done <<< "$closurePaths"
           }
 
-          while IFS= read -r storePath; do
-            mountStorePath "$storePath"
-          done < ${runtimeClosure}/store-paths
+          if [ "$allowAllDirs" = 0 ]; then
+            while IFS= read -r storePath; do
+              mountStorePath "$storePath"
+            done < ${runtimeClosure}/store-paths
+          fi
         ''
     }
 

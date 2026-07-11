@@ -32,6 +32,9 @@ Bwrap options:
   --cpu PERCENT                Set systemd CPUQuota (default: 200%).
   --tasks COUNT                Set systemd TasksMax (default: 512).
   --disable-nested-userns      Experimental: disable nested user namespaces.
+  --allow-dir PATH             Mount PATH read-write at its original path (repeatable).
+  --allow-home                 Mount the invoking user's home directory read-write.
+  --all-dirs                   Mount the host filesystem read-write.
   -h, --help                   Show this help.
 
 Nix modes:
@@ -105,8 +108,11 @@ EOF
       local wrapper
       local nixModeSet=0
       local flakeTargetSet=0
+      local allowAllDirs=0
       local -a nixPackages=()
       local -a codexArgs=()
+      local -a allowedDirs=()
+      local -a wrapperArgs=()
 
       while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -131,6 +137,19 @@ EOF
             ;;
           --disable-nested-userns)
             disableNestedUserns=1
+            shift
+            ;;
+          --allow-dir)
+            requireValue "$@"
+            allowedDirs+=("$2")
+            shift 2
+            ;;
+          --allow-home)
+            allowedDirs+=("$HOME")
+            shift
+            ;;
+          --all-dirs)
+            allowAllDirs=1
             shift
             ;;
           --full)
@@ -217,9 +236,22 @@ EOF
         fi
       fi
 
+      if [ "$allowAllDirs" = 1 ] && [ "''${#allowedDirs[@]}" -gt 0 ]; then
+        echo "--all-dirs cannot be combined with --allow-dir or --allow-home" >&2
+        exit 2
+      fi
+
+      if [ "$allowAllDirs" = 1 ]; then
+        wrapperArgs=(--all-dirs)
+      else
+        for allowedDir in "''${allowedDirs[@]}"; do
+          wrapperArgs+=(--allow-dir "$allowedDir")
+        done
+      fi
+
       case "$nixMode" in
         full)
-          runBwrap "$wrapper" "''${codexArgs[@]}"
+          runBwrap "$wrapper" "''${wrapperArgs[@]}" -- "''${codexArgs[@]}"
           ;;
         nixpkgs)
           if [ "''${#nixPackages[@]}" -eq 0 ]; then
@@ -234,7 +266,7 @@ EOF
             CODEX_BWRAP_TASKS_MAX="$tasksMax" \
             CODEX_BWRAP_DISABLE_NESTED_USERNS="$disableNestedUserns" \
             CODEX_BWRAP_IMPORT_DEV_ENV=0 \
-            "$wrapper" "''${codexArgs[@]}"
+            "$wrapper" "''${wrapperArgs[@]}" -- "''${codexArgs[@]}"
           ;;
         flake)
           importDevEnv=1
@@ -245,7 +277,7 @@ EOF
             CODEX_BWRAP_TASKS_MAX="$tasksMax" \
             CODEX_BWRAP_DISABLE_NESTED_USERNS="$disableNestedUserns" \
             CODEX_BWRAP_IMPORT_DEV_ENV="$importDevEnv" \
-            "$wrapper" "''${codexArgs[@]}"
+            "$wrapper" "''${wrapperArgs[@]}" -- "''${codexArgs[@]}"
           ;;
       esac
     }

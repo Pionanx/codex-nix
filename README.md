@@ -60,11 +60,19 @@ not mounted. Network access remains available for Codex API requests.
 cd /path/to/project
 codex                         # read-only workspace, full /nix/store
 codex --write                 # explicitly allow workspace changes
+codex --allow-dir "$HOME/Projects/client"  # allow one additional directory
+codex --allow-home             # allow the complete home directory
+codex --all-dirs               # allow the complete host filesystem
 codex --unwrapped             # run upstream Codex without the outer sandbox
 ```
 
 `--unwrapped` bypasses Bubblewrap but still sets `CODEX_HOME` to the XDG location
 so it shares authentication, configuration, and sessions with sandboxed Codex.
+
+`--allow-dir` is repeatable and mounts each supplied absolute path read-write at
+its original location. `--allow-home` is shorthand for `--allow-dir "$HOME"`.
+`--all-dirs` bind-mounts host `/` read-write and therefore disables filesystem
+isolation; it cannot be combined with either directory-specific option.
 
 ### Resource Limits
 

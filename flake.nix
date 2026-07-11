@@ -109,7 +109,7 @@
             dispatcher =
               pkgs.runCommand "codex-dispatch-${codexUnwrapped.version}"
                 {
-                  nativeBuildInputs = [ codex ];
+                  nativeBuildInputs = [ codex codexBwrap ];
                 }
                 ''
                   HOME="$TMPDIR/home"
@@ -133,6 +133,16 @@
                       exit 1
                       ;;
                   esac
+
+                  for option in "--allow-dir PATH" "--allow-home" "--all-dirs"; do
+                    case "$help" in
+                      *"$option"*) ;;
+                      *)
+                        echo "missing documented option: $option" >&2
+                        exit 1
+                        ;;
+                    esac
+                  done
 
                   for args in "--nixpkgs" "--nixpkgs --write"; do
                     if codex $args >"$TMPDIR/error" 2>&1; then
@@ -162,6 +172,26 @@
                   fi
 
                   if ! ${pkgs.gnugrep}/bin/grep -Fq "only one Nix mode may be selected" "$TMPDIR/error"; then
+                    cat "$TMPDIR/error" >&2
+                    exit 1
+                  fi
+
+                  if codex --allow-home --all-dirs --nixpkgs >"$TMPDIR/error" 2>&1; then
+                    echo "conflicting directory access options unexpectedly succeeded" >&2
+                    exit 1
+                  fi
+
+                  if ! ${pkgs.gnugrep}/bin/grep -Fq -- "--all-dirs cannot be combined" "$TMPDIR/error"; then
+                    cat "$TMPDIR/error" >&2
+                    exit 1
+                  fi
+
+                  if codex-bwrap --allow-dir >"$TMPDIR/error" 2>&1; then
+                    echo "codex-bwrap accepted a missing directory value" >&2
+                    exit 1
+                  fi
+
+                  if ! ${pkgs.gnugrep}/bin/grep -Fq "missing value for --allow-dir" "$TMPDIR/error"; then
                     cat "$TMPDIR/error" >&2
                     exit 1
                   fi
